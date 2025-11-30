@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Canvas Duck Hunt — Clone</title>
+<style>
+  :root{
+    --bg:#0b1220;
+    --panel:#0f1724;
+    --accent:#ffd166;
+    --muted:#9aa6bd;
+    --card:#0b1320;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{background:linear-gradient(180deg,#071028 0%, #0b1220 60%);display:flex;align-items:center;justify-content:center;color:#e6eef8}
+  .wrap{width:min(980px,96vw);max-width:980px;padding:18px}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+  header h1{font-size:18px;margin:0}
+  .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:12px;box-shadow:0 6px 20px rgba(2,6,23,0.6)}
+  .topbar{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .stats{display:flex;gap:8px;align-items:center}
+  .stat{background:rgba(255,255,255,0.02);padding:8px 10px;border-radius:8px;color:var(--muted);font-weight:600}
+  .btn{background:var(--accent);color:#081123;padding:8px 12px;border-radius:8px;border:none;cursor:pointer;font-weight:700}
+  canvas{display:block;width:100%;height:60vh;border-radius:10px;background:linear-gradient(180deg,#a7d8ff08,#0000);}
+  .controls{display:flex;gap:10px;align-items:center;margin-top:10px}
+  .small{font-size:12px;color:var(--muted)}
+  footer.small{margin-top:10px;color:var(--muted);font-size:12px}
+  @media (max-width:600px){
+    canvas{height:52vh}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="" alt="" style="width:46px;height:46px;border-radius:6px;background:linear-gradient(90deg,#ffd166,#ef476f)" />
+    <div>
+      <h1>Duck Hunt — Canvas Clone</h1>
+      <div class="small">Click or tap targets to shoot. Limited ammo each round.</div>
+    </div>
+  </header>
+
+  <div class="panel">
+    <div class="topbar">
+      <div class="stats">
+        <div class="stat" id="score">Score: 0</div>
+        <div class="stat" id="ammo">Ammo: 6</div>
+        <div class="stat" id="round">Round: 1</div>
+        <div class="stat" id="lives">Lives: 3</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn" id="startBtn">Start</button>
+        <button class="btn" id="pauseBtn">Pause</button>
+      </div>
+    </div>
+
+    <canvas id="game"></canvas>
+
+    <div class="controls">
+      <div class="small">Controls: Click / Tap to shoot. Press <strong>Space</strong> to reload.</div>
+      <div style="flex:1"></div>
+      <div class="small">Made for learning — safe and non-violent.</div>
+    </div>
+  </div>
+
+  <footer class="small">Tip: tweak speeds & counts in the code to change difficulty.</footer>
+</div>
+
+<script>
+// ============= CONFIG =============
+const CONFIG = {
+  ammo: 6,
+  lives: 3,
+  spawnIntervalMs: 900,
+  baseSpawnCount: 6,
+  baseSpeed: 120,
+  speedIncreasePerRound: 20,
+  gravity: 220,
+  fallSpeed: 60,
+};
+
+// ============= AUDIO =============
+class SoundManager {
+  constructor() {
+    this.ctx = null;
+  }
+
+  init() {
+    if (!this.ctx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AudioCtx();
+    }
+  }
+
+  play(type, frequency = 300, duration = 0.06, volume = 0.02) {
+    try {
+      this.init();
+      const t = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.type = type;
+      osc.frequency.setValueAtTime(frequency, t);
+      gain.gain.setValueAtTime(volume, t);
+      osc.start(t);
+      osc.stop(t + duration);
+    } catch (e) {
+      // audio unavailable
+    }
+  }
+
+  hit() { this.play('square', 700, 0.08, 0.08); }
+  reload() { this.play('sine', 220, 0.12, 0.06); }
+  miss() { this.play('sine', 300, 0.06, 0.02); }
+  gameOver() { this.play('sine', 100, 0.3, 0.05); }
+}
+
+// ============= DUCK CLASS =============
+class Duck {
+  constructor(x, y, vx, vy, size) {
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+    this.size = size;
+    this.rotation = 0;
+    this.rotSpeed = (Math.random() - 0.5) * 0.04;
+    this.hit = false;
+    this.created = performance.now();
+    this.points = Math.round(size);
+  }
+
+  update(dt, canvasW, canvasH) {
+    if (this.hit) {
+      // falling state
+      this.vy += CONFIG.gravity * dt;
+      this.y += this.vy * dt;
+      this.x += this.vx * dt;
+      this.rotation += 0.06;
+      return this.y > canvasH + 60;
+    } else {
+      // flying state
+      this.x += this.vx * dt;
+      const sway = Math.sin((performance.now() - this.created) / 400) * 10 * dt;
+      this.y += sway;
+      this.rotation += this.rotSpeed;
+      return this.x < -120 || this.x > canvasW + 120;
+    }
+  }
+
+  shoot() {
+    this.hit = true;
+    this.vy = CONFIG.fallSpeed;
+    this.vx *= 0.2;
+    this.rotation = 0;
+    this.y -= 6;
+  }
+
+  isPointInside(px, py) {
+    const dx = px - this.x;
+    const dy = py - this.y;
+    const rx = this.size * 0.9;
+    const ry = this.size * 0.6;
+    return (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1;
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rotation);
+
+    const s = this.size;
+    const color = this.hit ? { body: '#6b6b6b', wing: '#555', head: '#4c4c4c' } 
+                            : { body: '#283149', wing: '#f77f00', head: '#3a86ff' };
+
+    // body
+    ctx.beginPath();
+    ctx.ellipse(0, 0, s, s * 0.65, 0, 0, Math.PI * 2);
+    ctx.fillStyle = color.body;
+    ctx.fill();
+
+    // wing
+    ctx.beginPath();
+    ctx.ellipse(-s * 0.1, -s * 0.1, s * 0.65, s * 0.4, -0.6, 0, Math.PI * 2);
+    ctx.fillStyle = color.wing;
+    ctx.fill();
+
+    // head
+    ctx.beginPath();
+    ctx.arc(s * 0.9, -s * 0.25, s * 0.45, 0, Math.PI * 2);
+    ctx.fillStyle = color.head;
+    ctx.fill();
+
+    // beak
+    ctx.beginPath();
+    ctx.moveTo(s * 1.3, -s * 0.35);
+    ctx.lineTo(s * 1.6, -s * 0.2);
+    ctx.lineTo(s * 1.3, -s * 0.05);
+    ctx.fillStyle = '#ffd166';
+    ctx.fill();
+
+    // eye
+    ctx.beginPath();
+    ctx.arc(s * 0.95, -s * 0.4, Math.max(1.8, s * 0.08), 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(s * 0.95, -s * 0.4, Math.max(0.8, s * 0.03), 0, Math.PI * 2);
+    ctx.fillStyle = '#000';
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+// ============= GAME ENGINE =============
+class Game {
+  constructor() {
+    this.canvas = document.getElementById('game');
+    this.ctx = this.canvas.getContext('2d');
+    this.sound = new SoundManager();
+
+    this.running = false;
+    this.paused = false;
+    this.score = 0;
+    this.ammo = CONFIG.ammo;
+    this.round = 1;
+    this.lives = CONFIG.lives;
+    this.ducks = [];
+    this.messages = [];
+
+    this.mouse = { x: 0, y: 0 };
+    this.lastFrame = 0;
+    this.lastSpawn = 0;
+    this.spawnCount = 0;
+    this.duckTarget = CONFIG.baseSpawnCount;
+
+    this.setupCanvasAndUI();
+    this.setupInputListeners();
+  }
+
+  setupCanvasAndUI() {
+    window.addEventListener('resize', () => this.resizeCanvas());
+    this.resizeCanvas();
+
+    this.ui = {
+      score: document.getElementById('score'),
+      ammo: document.getElementById('ammo'),
+      round: document.getElementById('round'),
+      lives: document.getElementById('lives'),
+      start: document.getElementById('startBtn'),
+      pause: document.getElementById('pauseBtn'),
+    };
+
+    this.ui.start.addEventListener('click', () => this.running ? this.reset() : this.start());
+    this.ui.pause.addEventListener('click', () => this.paused ? this.resume() : this.pause());
+  }
+
+  resizeCanvas() {
+    const rect = this.canvas.getBoundingClientRect();
+    this.canvas.width = Math.floor(rect.width * devicePixelRatio);
+    this.canvas.height = Math.floor(rect.height * devicePixelRatio);
+    this.ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  }
+
+  setupInputListeners() {
+    this.canvas.addEventListener('mousemove', (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      this.mouse.x = e.clientX - rect.left;
+      this.mouse.y = e.clientY - rect.top;
+    });
+
+    this.canvas.addEventListener('click', () => this.shoot());
+    this.canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      const touch = e.changedTouches[0];
+      const rect = this.canvas.getBoundingClientRect();
+      this.mouse.x = touch.clientX - rect.left;
+      this.mouse.y = touch.clientY - rect.top;
+      this.shoot();
+    }, { passive: false });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        this.reload();
+      }
+      if (e.code === 'KeyP' && this.running) this.paused ? this.resume() : this.pause();
+    });
+  }
+
+  start() {
+    this.running = true;
+    this.paused = false;
+    this.score = 0;
+    this.ammo = CONFIG.ammo;
+    this.round = 1;
+    this.lives = CONFIG.lives;
+    this.ducks = [];
+    this.spawnCount = 0;
+    this.duckTarget = CONFIG.baseSpawnCount;
+    this.lastSpawn = performance.now();
+    this.lastFrame = performance.now();
+    this.ui.start.textContent = 'Reset';
+    this.updateUI();
+    requestAnimationFrame((ts) => this.tick(ts));
+  }
+
+  reset() {
+    this.running = false;
+    this.ducks = [];
+    this.ui.start.textContent = 'Start';
+    this.ui.pause.textContent = 'Pause';
+    this.updateUI();
+  }
+
+  pause() {
+    this.paused = true;
+    this.ui.pause.textContent = 'Resume';
+  }
+
+  resume() {
+    this.paused = false;
+    this.ui.pause.textContent = 'Pause';
+    this.lastFrame = performance.now();
+  }
+
+  shoot() {
+    if (!this.running || this.paused || this.ammo <= 0) {
+      if (this.ammo <= 0) this.showMessage('Reload!');
+      return;
+    }
+
+    this.ammo--;
+    this.updateUI();
+
+    // check hit from back to front (top to bottom draw order)
+    for (let i = this.ducks.length - 1; i >= 0; i--) {
+      const duck = this.ducks[i];
+      if (!duck.hit && duck.isPointInside(this.mouse.x, this.mouse.y)) {
+        duck.shoot();
+        this.score += duck.points;
+        this.sound.hit();
+        this.spawnFeathers(duck.x, duck.y);
+        this.updateUI();
+        break;
+      }
+    }
+  }
+
+  reload() {
+    if (this.ammo === CONFIG.ammo) return;
+    this.ammo = CONFIG.ammo;
+    this.sound.reload();
+    this.showMessage('Reloaded!');
+    this.updateUI();
+  }
+
+  spawnDuck() {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const x = side === -1 ? -50 : this.canvas.width / devicePixelRatio + 50;
+    const y = 80 + Math.random() * (this.canvas.height / devicePixelRatio - 180);
+    const baseSpeed = CONFIG.baseSpeed + (this.round - 1) * CONFIG.speedIncreasePerRound;
+    const speed = baseSpeed * (0.8 + Math.random() * 0.8);
+    const vx = side === -1 ? speed : -speed;
+    const vy = Math.random() * 20 - 10;
+    const size = 28 + Math.random() * 18;
+
+    this.ducks.push(new Duck(x, y, vx, vy, size));
+  }
+
+  spawnFeathers(x, y) {
+    for (let i = 0; i < 8; i++) {
+      this.showMessage('✨', x + (Math.random() - 0.5) * 20, y + (Math.random() - 0.5) * 20, 600 + Math.random() * 400, true);
+    }
+  }
+
+  showMessage(text, x = null, y = null, life = 900, fade = false) {
+    const W = this.canvas.width / devicePixelRatio;
+    const H = this.canvas.height / devicePixelRatio;
+    x ??= W / 2;
+    y ??= 60 + Math.random() * 20;
+    this.messages.push({ text, x, y, life, started: performance.now(), fade });
+  }
+
+  nextRound() {
+    this.round++;
+    this.spawnCount = 0;
+    this.duckTarget = CONFIG.baseSpawnCount + (this.round - 1) * 2;
+    this.ammo = Math.min(CONFIG.ammo + 2, this.ammo + 3);
+  }
+
+  endGame() {
+    this.running = false;
+    this.showMessage('Game Over', null, this.canvas.height / devicePixelRatio / 2, 2500);
+    this.sound.gameOver();
+    this.ui.start.textContent = 'Start';
+    setTimeout(() => {
+      alert(`Game Over! Score: ${this.score}\nRounds: ${this.round}`);
+    }, 300);
+  }
+
+  tick(ts) {
+    if (!this.running) return;
+    if (this.paused) {
+      this.lastFrame = ts;
+      requestAnimationFrame((t) => this.tick(t));
+      return;
+    }
+
+    const dt = Math.min(40, ts - this.lastFrame) / 1000;
+    this.lastFrame = ts;
+
+    // spawn logic
+    const spawnInterval = Math.max(250, CONFIG.spawnIntervalMs - (this.round - 1) * 60);
+    if (performance.now() - this.lastSpawn > spawnInterval && this.spawnCount < this.duckTarget) {
+      this.spawnDuck();
+      this.lastSpawn = performance.now();
+      this.spawnCount++;
+    }
+
+    // update ducks
+    const canvasW = this.canvas.width / devicePixelRatio;
+    const canvasH = this.canvas.height / devicePixelRatio;
+    for (let i = this.ducks.length - 1; i >= 0; i--) {
+      if (this.ducks[i].update(dt, canvasW, canvasH)) {
+        if (!this.ducks[i].hit) {
+          this.sound.miss();
+          this.lives--;
+          this.updateUI();
+          if (this.lives <= 0) {
+            this.endGame();
+            return;
+          }
+        }
+        this.ducks.splice(i, 1);
+      }
+    }
+
+    // check round complete
+    const allDone = this.spawnCount >= this.duckTarget && this.ducks.every(d => d.hit || !((d.x > -120 && d.x < canvasW + 120)));
+    if (allDone) {
+      setTimeout(() => this.nextRound(), 900);
+    }
+
+    this.draw();
+    requestAnimationFrame((t) => this.tick(t));
+  }
+
+  draw() {
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.drawBackground();
+
+    for (const duck of this.ducks) duck.draw(this.ctx);
+
+    this.drawMessages();
+    this.drawCrosshair();
+  }
+
+  drawBackground() {
+    const W = this.canvas.width / devicePixelRatio;
+    const H = this.canvas.height / devicePixelRatio;
+
+    // sky
+    const g = this.ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#87cefb33');
+    g.addColorStop(1, '#0b122033');
+    this.ctx.fillStyle = g;
+    this.ctx.fillRect(0, 0, W, H);
+
+    // ground
+    const groundH = 70;
+    this.ctx.fillStyle = '#0b2b1a';
+    this.ctx.fillRect(0, H - groundH, W, groundH);
+
+    // trees
+    for (let i = 0; i < 8; i++) {
+      const tx = (i * W / 8 + Math.sin(i) * 30) % W;
+      this.ctx.fillStyle = '#0b3b22';
+      this.ctx.beginPath();
+      this.ctx.moveTo(tx, H - groundH);
+      this.ctx.lineTo(tx + 18, H - groundH - 60);
+      this.ctx.lineTo(tx + 36, H - groundH);
+      this.ctx.fill();
+    }
+  }
+
+  drawCrosshair() {
+    const { x, y } = this.mouse;
+    this.ctx.save();
+    this.ctx.strokeStyle = '#ffffffcc';
+    this.ctx.lineWidth = 1.5;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, 18, 0, Math.PI * 2);
+    this.ctx.stroke();
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - 28, y);
+    this.ctx.lineTo(x - 12, y);
+    this.ctx.moveTo(x + 12, y);
+    this.ctx.lineTo(x + 28, y);
+    this.ctx.moveTo(x, y - 28);
+    this.ctx.lineTo(x, y - 12);
+    this.ctx.moveTo(x, y + 12);
+    this.ctx.lineTo(x, y + 28);
+    this.ctx.stroke();
+    this.ctx.restore();
+  }
+
+  drawMessages() {
+    const now = performance.now();
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      const age = now - m.started;
+      if (age > m.life) {
+        this.messages.splice(i, 1);
+        continue;
+      }
+      const alpha = 1 - age / m.life;
+      this.ctx.save();
+      this.ctx.globalAlpha = alpha;
+      this.ctx.fillStyle = '#fff';
+      this.ctx.font = (m.fade ? '24px' : '20px') + ' system-ui, Arial';
+      this.ctx.fillText(m.text, m.x, m.y - age / 40);
+      this.ctx.restore();
+    }
+  }
+
+  updateUI() {
+    this.ui.score.textContent = `Score: ${this.score}`;
+    this.ui.ammo.textContent = `Ammo: ${this.ammo}`;
+    this.ui.round.textContent = `Round: ${this.round}`;
+    this.ui.lives.textContent = `Lives: ${this.lives}`;
+  }
+}
+
+// ============= INIT =============
+const game = new Game();
+game.updateUI();
+
+</script>
+</body>
+</html>
